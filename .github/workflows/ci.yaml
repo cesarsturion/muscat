@@ -1,0 +1,21 @@
+name: CI - Build the Image
+on: 
+  workflow_dispatch:
+  pull_request:
+    types:
+      - 'opened'
+
+env:
+  IMAGE_NAME: ${{ github.event.repository.name }}
+
+jobs: 
+  build:
+    name: Build the Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Build and push the Docker image
+        run: |
+          docker build -t vissimo/$IMAGE_NAME:latest .

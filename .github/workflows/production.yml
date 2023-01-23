@@ -1,0 +1,88 @@
+name: CI with GitOps - production
+
+on:
+  workflow_dispatch:
+  release:
+    types:
+      - 'published'
+
+env:
+  IMAGE_NAME: "gitops-argocd"
+  CONFIG_REPO_NAME: "gudiaolabs-charts"
+
+jobs:
+  build:
+    name: Build and Pushing the Image
+    runs-on: ubuntu-latest
+    outputs:
+      TAG_VERSION: ${{ steps.set-tag.outputs.tag-output }}
+    steps:      
+      - uses: actions/checkout@v3
+      
+      - name: Login to the Registry
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      
+      - name: Set the tag
+        id: set-tag
+        run: |
+          git_hash=${{ github.event.release.name }}
+          echo "TAG=$git_hash" >> $GITHUB_ENV
+          echo "tag-output=$git_hash" >> $GITHUB_OUTPUT
+
+      - name: Build and Push the Image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USER }}/$IMAGE_NAME:${{ env.TAG }} .
+          docker push ${{ secrets.DOCKER_USER }}/$IMAGE_NAME:${{ env.TAG }}
+
+  deploy: 
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: "write"    
+      pull-requests: 'write'
+    steps:
+      - name: Setup SSH
+        uses: MrSquaare/ssh-setup-action@v1
+        with:
+            host: github.com
+            private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Dynamically set DATE environment variable
+        run: echo "DATE=$(date +'%Y/%m/%d-%H:%M')" >> $GITHUB_ENV
+
+      - run: |
+          echo "cloning config repo $CONFIG_REPO_NAME"
+          git clone git@github.com:gudiaolabs/gudiaolabs-charts.git
+
+          cd ./$CONFIG_REPO_NAME
+
+          echo "New Values"
+          git_hash=${{ needs.build.outputs.TAG_VERSION }}
+          namespace_new="production"
+          env_new="production"
+
+          echo "create branch"
+          git pull
+          git checkout -b $git_hash
+
+          echo "Getting values in file"
+          tag=$(cat ./${{ env.IMAGE_NAME }}/values.yaml | grep tag: | awk '{print $2}')
+          namespace_old=$(cat ./${{ env.IMAGE_NAME }}/values.yaml | grep namespace: | awk '{print $2}')
+          env_old=$(cat ./${{ env.IMAGE_NAME }}/values.yaml | grep env: | awk '{print $2}')
+
+          echo "updating values file"
+          sed -i "s/$tag/$git_hash/g;s/$namespace_old/$namespace_new/g;s/$env_old/$env_new/g;" ./${{ env.IMAGE_NAME }}/values.yaml
+
+          echo "Commit changes"
+          git config --global user.email ${{ secrets.GIT_USER_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USER_NAME }}
+          git add . && git commit -m "update image tag:$git_hash - ${{ env.DATE }} - Commit by Github Actions"
+          git push --set-upstream origin $git_hash
+          git request-pull $git_hash git@github.com:gudiaolabs/gudiaolabs-charts.git main
+
+
+

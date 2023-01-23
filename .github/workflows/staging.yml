@@ -1,0 +1,92 @@
+name: CI - Build and Pushing the Image with GitOps - Staging
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - 'closed'
+
+env:
+  ENVIRONMENT: "staging"
+  IMAGE_NAME: ${{ github.event.repository.name }}
+
+jobs:
+  build:
+    name: Build and Pushing the Image - Staging
+    runs-on: ubuntu-latest
+    outputs:
+      TAG_VERSION: ${{ steps.set-tag.outputs.tag-output }}
+    steps:      
+
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set the tag
+        id: set-tag
+        run: |
+          git_hash=$(git rev-parse --short ${{ github.sha }})
+          echo "TAG=$git_hash" >> $GITHUB_ENV
+          echo "tag-output=$git_hash" >> $GITHUB_OUTPUT
+
+      - name: Login to the Registry
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKER_USER }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push the Image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USER }}/$IMAGE_NAME:${{ env.TAG }} .
+          docker push ${{ secrets.DOCKER_USER }}/$IMAGE_NAME:${{ env.TAG }}
+
+  deploy: 
+    name: Deploy - Staging
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Setup SSH
+        uses: MrSquaare/ssh-setup-action@v1
+        with:
+            host: github.com
+            private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Dynamically set DATE environment variable
+        run: |
+          echo "DATE=$(date +'%Y/%m/%d-%H:%M')" >> $GITHUB_ENV
+          echo "RC_SEQ=${{ github.run_number }}" >> $GITHUB_ENV
+
+
+      - run: |
+          echo "cloning config repo gudiaolabs-charts"
+          git clone git@github.com:gudiaolabs/gudiaolabs-charts.git
+          
+          cd ./gudiaolabs-charts/charts/${{ env.IMAGE_NAME }}
+
+          echo "checkout main branch"
+          git checkout main
+
+          echo "New Values - values.yaml"
+          git_hash=${{ needs.build.outputs.TAG_VERSION }}
+          namespace_new=${{ env.IMAGE_NAME }}
+          env_new=${{ env.ENVIRONMENT }}
+
+          echo "Getting values in file - values.yaml"
+          tag=$(cat ./values.yaml | grep tag: | awk '{print $2}')
+          namespace_old=$(cat ./values.yaml | grep namespace: | awk '{print $2}')
+          env_old=$(cat ./values.yaml | grep environment: | awk '{print $2}')
+
+          # echo "Getting values in file - Chart.yaml"
+          # version_old=$(cat ./Chart.yaml | grep version: | awk '{print $2}')
+          # version_new="$version_old-rc${{ env.RC_SEQ }}"
+
+          echo "updating values file values.yaml"
+          sed -i "s/$tag/$git_hash/g;s/$namespace_old/$namespace_new/g;s/$env_old/$env_new/g;" ./values.yaml
+
+          # echo "updating values file Chart.yaml"
+          # sed -i "s/$version_old/$version_new/g;" ./Chart.yaml
+
+          echo "Commit changes"
+          git config --global user.email ${{ secrets.GIT_USER_EMAIL }}
+          git config --global user.name ${{ secrets.GIT_USER_NAME }}
+          git add . && git commit -m "update image tag:$git_hash - ${{ env.DATE }}  - Commit by Github Actions"
+          git push

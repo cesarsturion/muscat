@@ -36,8 +36,8 @@ jobs:
 
       - name: Build and Push the Image
         run: |
-          docker build -t ${{ secrets.DOCKER_USER }}/$IMAGE_NAME:${{ env.TAG }} .
-          docker push ${{ secrets.DOCKER_USER }}/$IMAGE_NAME:${{ env.TAG }}
+          docker build -t ${{ secrets.DOCKER_USER }}/$IMAGE_NAME-${{ env.ENVIRONMENT }}:${{ env.TAG }} .
+          docker push ${{ secrets.DOCKER_USER }}/$IMAGE_NAME-${{ env.ENVIRONMENT }}:${{ env.TAG }}
 
   deploy: 
     name: Deploy - Staging
